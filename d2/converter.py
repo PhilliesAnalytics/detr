@@ -4,6 +4,8 @@ Helper script to convert models trained with the main version of DETR to be used
 """
 import json
 import argparse
+import hashlib
+import re
 
 import numpy as np
 import torch
@@ -33,6 +35,14 @@ def main():
     if args.source_model.startswith("https"):
         checkpoint = torch.hub.load_state_dict_from_url(args.source_model, map_location="cpu", check_hash=True)
     else:
+        # Borrowing hash checking implementation from torch.hub.load_state_dict_from_url
+        HASH_REGEX = re.compile(r"-([a-f0-9]*)\.")
+        r = HASH_REGEX.search(args.source_model)
+        hash_prefix = r.group(1) if r else None
+        if hash_prefix is not None:
+            with open(args.source_model, "rb") as f:
+                source_model_hash = hashlib.sha256(f.read()).hexdigest()
+            assert hash_prefix == source_model_hash[:len(hash_prefix)]
         checkpoint = torch.load(args.source_model, map_location="cpu")
     model_to_convert = checkpoint["model"]
 
