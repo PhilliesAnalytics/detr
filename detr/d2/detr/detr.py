@@ -1,7 +1,7 @@
 # Copyright (c) Facebook, Inc. and its affiliates. All Rights Reserved
 import logging
 import math
-from typing import List
+from typing import List, Tuple
 
 import numpy as np
 import torch
@@ -38,7 +38,8 @@ class MaskedBackbone(nn.Module):
         self.feature_strides = [backbone_shape[f].stride for f in backbone_shape.keys()]
         self.num_channels = backbone_shape[list(backbone_shape.keys())[-1]].channels
 
-    def forward(self, images):
+    def forward(self, images: ImageList):
+        # print("MaskedBackbone:", type(images))
         features = self.backbone(images.tensor)
         masks = self.mask_out_padding(
             [features_per_level.shape for features_per_level in features.values()],
@@ -46,11 +47,13 @@ class MaskedBackbone(nn.Module):
             images.tensor.device,
         )
         assert len(features) == len(masks)
-        for i, k in enumerate(features.keys()):
-            features[k] = NestedTensor(features[k], masks[i])
-        return features
+        nested_tensor_features = {
+            k: NestedTensor(features[k], masks[i])
+            for i, k in enumerate(features.keys())
+        }
+        return nested_tensor_features
 
-    def mask_out_padding(self, feature_shapes, image_sizes, device):
+    def mask_out_padding(self, feature_shapes: List[List[int]], image_sizes: List[Tuple[int, int]], device: torch.device):
         masks = []
         assert len(feature_shapes) == len(self.feature_strides)
         for idx, shape in enumerate(feature_shapes):
@@ -59,11 +62,29 @@ class MaskedBackbone(nn.Module):
             for img_idx, (h, w) in enumerate(image_sizes):
                 masks_per_feature_level[
                     img_idx,
-                    : int(np.ceil(float(h) / self.feature_strides[idx])),
-                    : int(np.ceil(float(w) / self.feature_strides[idx])),
+                    : int(torch.ceil(torch.tensor(float(h) / self.feature_strides[idx]))),
+                    : int(torch.ceil(torch.tensor(float(w) / self.feature_strides[idx]))),
                 ] = 0
             masks.append(masks_per_feature_level)
         return masks
+
+
+# This duplicates detr.models.backbone.Joiner with the correct typing.
+class D2Joiner(nn.Sequential):
+    def __init__(self, backbone: MaskedBackbone, position_embedding):
+        super().__init__(backbone, position_embedding)
+
+    def forward(self, tensor_list: ImageList):
+        # print("D2Joiner:", type(tensor_list))
+        xs = self[0](tensor_list)
+        out: List[NestedTensor] = []
+        pos = []
+        for name, x in xs.items():
+            out.append(x)
+            # position encoding
+            pos.append(self[1](x).to(x.tensors.dtype))
+
+        return out, pos
 
 
 @META_ARCH_REGISTRY.register()
@@ -114,6 +135,9 @@ class Detr(nn.Module):
         self.detr = DETR(
             backbone, transformer, num_classes=self.num_classes, num_queries=num_queries, aux_loss=deep_supervision
         )
+        # with open("wtf.txt", "w") as f:
+        #     print(self.detr, file=f)
+        #     print("done", f)
         if self.mask_on:
             frozen_weights = cfg.MODEL.DETR.FROZEN_WEIGHTS
             if frozen_weights != '':

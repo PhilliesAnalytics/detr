@@ -9,9 +9,10 @@ import torch.nn.functional as F
 import torchvision
 from torch import nn
 from torchvision.models._utils import IntermediateLayerGetter
-from typing import Dict, List
+from typing import Dict, List, Union
 
 from detr.util.misc import NestedTensor, is_main_process
+from detectron2.structures import ImageList
 
 from detr.models.position_encoding import build_position_encoding
 
@@ -97,7 +98,12 @@ class Joiner(nn.Sequential):
     def __init__(self, backbone, position_embedding):
         super().__init__(backbone, position_embedding)
 
-    def forward(self, tensor_list: NestedTensor):
+    def forward(self, tensor_list: ImageList):
+        # NOTE: When running through Detectron2,
+        # self[0] is detr.d2.detr.detr.MaskedBackbone and
+        # tensor_list is an ImageList NOT a NestedTensor.
+        # This makes it impossible to TorchScript.
+        # print("Joiner:", type(self[0]), type(tensor_list))
         xs = self[0](tensor_list)
         out: List[NestedTensor] = []
         pos = []
